@@ -1,0 +1,12 @@
+[package]
+name = "hemtt-tests-extension"
+version = "0.1.0"
+authors = ["HEMTT"]
+edition = "2018"
+
+[lib]
+name = "hemtt_tests"
+crate-type = ["cdylib"]
+
+[dependencies]
+arma-rs = { git = "https://github.com/synixebrett/arma-rs", branch = "expirement" }
