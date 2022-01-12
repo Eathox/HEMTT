@@ -2,9 +2,9 @@ name: Rust Checks
 
 on:
   push:
-    branches: [ main ]
+    branches: [ preprocessor_refactor ]
   pull_request:
-    branches: [ main ]
+    branches: [ preprocessor_refactor ]
 
 jobs:
   fmt:
