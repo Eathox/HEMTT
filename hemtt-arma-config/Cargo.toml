@@ -1,0 +1,16 @@
+[package]
+name = "hemtt-arma-config"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+pest = "2.1"
+pest_derive = "2.1"
+log = "0.4"
+
+[dev-dependencies]
+criterion = "0.3"
+
+[[bench]]
+name = "tokenizer_cba_common_macros"
+harness = false
