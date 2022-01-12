@@ -10,6 +10,7 @@ pub struct Defines<'a> {
 }
 
 impl<'a> Defines<'a> {
+    #[must_use]
     pub fn new() -> Self {
         Defines {
             defines: Mutex::new(HashMap::new()),
@@ -39,13 +40,21 @@ impl<'a> Defines<'a> {
     #[must_use]
     pub fn get(&self, word: &str) -> Option<Define<'a>> {
         let defines = self.defines.lock().unwrap();
-        defines.get(word).map(|d| d.to_owned())
+        defines.get(word).cloned()
     }
 
     #[must_use]
     pub fn contains(&self, word: &str) -> bool {
         let defines = self.defines.lock().unwrap();
         defines.contains_key(word)
+    }
+}
+
+impl Clone for Defines<'_> {
+    fn clone(&self) -> Self {
+        Defines {
+            defines: Mutex::new(self.defines.lock().unwrap().clone()),
+        }
     }
 }
 
@@ -73,17 +82,13 @@ impl<'a> Define<'a> {
     }
 
     #[must_use]
-    pub fn args(&self) -> Option<&Vec<Vec<&'a TokenPair>>> {
+    pub const fn args(&self) -> Option<&Vec<Vec<&'a TokenPair>>> {
         self.args.as_ref()
     }
 
     #[must_use]
     pub fn statement(&self) -> Vec<TokenPair<'a>> {
-        self.statement
-            .clone()
-            .into_iter()
-            .map(|t| t.to_owned())
-            .collect()
+        self.statement.clone().into_iter().cloned().collect()
     }
 
     pub fn statement_ref(&self) -> Vec<&'a TokenPair<'a>> {

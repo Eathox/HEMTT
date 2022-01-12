@@ -10,18 +10,22 @@ pub struct Rendered<'a> {
 }
 
 impl<'a> Rendered<'a> {
-    pub fn new(tokens: &'a [TokenPair<'a>], map: HashMap<usize, LineMap>) -> Self {
+    #[must_use]
+    pub const fn new(tokens: &'a [TokenPair<'a>], map: HashMap<usize, LineMap>) -> Self {
         Self { tokens, map }
     }
 
-    pub fn tokens(&self) -> &[TokenPair<'a>] {
+    #[must_use]
+    pub const fn tokens(&self) -> &[TokenPair<'a>] {
         self.tokens
     }
 
-    pub fn map(&self) -> &HashMap<usize, LineMap> {
+    #[must_use]
+    pub const fn map(&self) -> &HashMap<usize, LineMap> {
         &self.map
     }
 
+    #[must_use]
     pub fn export(&self) -> String {
         let mut content = String::new();
         for token in self.tokens {

@@ -1,4 +1,4 @@
-use pest::{error::Error, iterators::Pair, Parser};
+use pest::{iterators::Pair, Parser};
 
 use self::tokens::{Token, TokenPair, Whitespace};
 
@@ -15,11 +15,11 @@ pub struct Tokens<'a> {
 }
 
 impl<'a> Tokens<'a> {
-    pub fn new(path: &'a str, source: &'a str) -> Result<Self, Error<Rule>> {
+    pub fn new(path: &'a str, source: &'a str) -> Result<Self, String> {
         let mut tokens = Vec::new();
-        let pairs = Tokenizer::parse(Rule::file, source)?;
+        let pairs = Tokenizer::parse(Rule::file, source).map_err(|e| e.to_string())?;
         for pair in pairs {
-            tokens.push(TokenPair::new(path, pair))
+            tokens.push(TokenPair::new(path, pair)?);
         }
 
         Ok(Tokens {
@@ -29,6 +29,7 @@ impl<'a> Tokens<'a> {
         })
     }
 
+    #[must_use]
     pub fn from_vec(path: &'a str, source: &'a str, tokens: Vec<TokenPair<'a>>) -> Self {
         Tokens {
             path,
@@ -41,29 +42,33 @@ impl<'a> Tokens<'a> {
         self.tokens.iter()
     }
 
-    pub fn path(&self) -> &str {
+    #[must_use]
+    pub const fn path(&self) -> &str {
         self.path
     }
 
-    pub fn source(&self) -> &str {
+    #[must_use]
+    pub const fn source(&self) -> &str {
         self.source
     }
 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.tokens.len()
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.tokens.is_empty()
     }
 }
 
-pub fn tokenize<'a>(source: &'a str, path: &'a str) -> Result<Tokens<'a>, Error<Rule>> {
+pub fn tokenize<'a>(source: &'a str, path: &'a str) -> Result<Tokens<'a>, String> {
     let mut tokens = Vec::new();
 
-    let pairs = Tokenizer::parse(Rule::file, source)?;
+    let pairs = Tokenizer::parse(Rule::file, source).map_err(|e| e.to_string())?;
     for pair in pairs {
-        tokens.push(TokenPair::new(path, pair))
+        tokens.push(TokenPair::new(path, pair)?);
     }
 
     Ok(Tokens {
@@ -73,40 +78,60 @@ pub fn tokenize<'a>(source: &'a str, path: &'a str) -> Result<Tokens<'a>, Error<
     })
 }
 
-impl From<Pair<'_, Rule>> for Token {
-    fn from(pair: Pair<Rule>) -> Token {
-        match pair.as_rule() {
-            Rule::word => Token::from_word(pair.as_str().to_string()),
-            Rule::alpha => Token::Alpha(pair.as_str().chars().next().unwrap()),
-            Rule::digit => Token::Digit(pair.as_str().parse::<u8>().unwrap()),
-            Rule::underscore => Token::Underscore,
-            Rule::dash => Token::Dash,
-            Rule::assignment => Token::Assignment,
-            Rule::left_brace => Token::LeftBrace,
-            Rule::right_brace => Token::RightBrace,
-            Rule::left_bracket => Token::LeftBracket,
-            Rule::right_bracket => Token::RightBracket,
-            Rule::left_parentheses => Token::LeftParenthesis,
-            Rule::right_parentheses => Token::RightParenthesis,
-            Rule::colon => Token::Colon,
-            Rule::semicolon => Token::Semicolon,
-            Rule::directive => Token::Directive,
-            Rule::escape => Token::Escape,
-            Rule::comma => Token::Comma,
-            Rule::decimal => Token::Decimal,
-            Rule::double_quote => Token::DoubleQuote,
-            Rule::single_quote => Token::SingleQuote,
-            Rule::char => Token::Char(pair.as_str().chars().next().unwrap()),
+impl TryFrom<Pair<'_, Rule>> for Token {
+    type Error = String;
+    fn try_from(pair: Pair<Rule>) -> Result<Self, Self::Error> {
+        Ok(match pair.as_rule() {
+            Rule::word => Self::from_word(pair.as_str().to_string()),
+            Rule::alpha => Self::Alpha(
+                pair.as_str()
+                    .chars()
+                    .next()
+                    .ok_or_else(|| String::from("No char"))?,
+            ),
+            Rule::digit => Self::Digit(
+                pair.as_str()
+                    .parse::<u8>()
+                    .map_err(|_| String::from("Invalid digit"))?,
+            ),
+            Rule::underscore => Self::Underscore,
+            Rule::dash => Self::Dash,
+            Rule::assignment => Self::Assignment,
+            Rule::left_brace => Self::LeftBrace,
+            Rule::right_brace => Self::RightBrace,
+            Rule::left_bracket => Self::LeftBracket,
+            Rule::right_bracket => Self::RightBracket,
+            Rule::left_parentheses => Self::LeftParenthesis,
+            Rule::right_parentheses => Self::RightParenthesis,
+            Rule::colon => Self::Colon,
+            Rule::semicolon => Self::Semicolon,
+            Rule::directive => Self::Directive,
+            Rule::escape => Self::Escape,
+            Rule::comma => Self::Comma,
+            Rule::decimal => Self::Decimal,
+            Rule::double_quote => Self::DoubleQuote,
+            Rule::single_quote => Self::SingleQuote,
+            Rule::char => Self::Char(
+                pair.as_str()
+                    .chars()
+                    .next()
+                    .ok_or_else(|| String::from("No char"))?,
+            ),
 
-            Rule::newline => Token::Newline,
-            Rule::space => Token::Whitespace(Whitespace::Space),
-            Rule::tab => Token::Whitespace(Whitespace::Tab),
-            Rule::WHITESPACE => Token::from(pair.into_inner().next().unwrap()),
-            Rule::EOI => Token::EOI,
+            Rule::newline => Self::Newline,
+            Rule::space => Self::Whitespace(Whitespace::Space),
+            Rule::tab => Self::Whitespace(Whitespace::Tab),
+            Rule::WHITESPACE => Self::try_from(
+                pair.into_inner()
+                    .next()
+                    .ok_or_else(|| String::from("No inner"))?,
+            )
+            .unwrap(),
+            Rule::EOI => Self::EOI,
 
             Rule::file => panic!("Unexpected attempt to tokenize file"),
             Rule::COMMENT => panic!("Unexpected attempt to tokenize comment"),
             // _ => panic!("Unknown: {:?}", pair),
-        }
+        })
     }
 }

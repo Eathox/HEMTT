@@ -7,7 +7,8 @@ pub enum Keyword {
 }
 
 impl Keyword {
-    pub fn size(&self) -> usize {
+    #[must_use]
+    pub const fn size(&self) -> usize {
         match self {
             Keyword::Class => 5,
             Keyword::Delete => 6,

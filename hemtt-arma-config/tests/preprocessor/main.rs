@@ -16,7 +16,7 @@ fn simple_define() {
     println!("{:?}", render(preprocessor.output()).export());
     assert_eq!(
         render(preprocessor.output()).export(),
-        "greeting = \"hi brett\";"
+        "\ngreeting = \"hi brett\";\n"
     );
 }
 
@@ -32,14 +32,14 @@ fn nested_define() {
     println!("{:?}", render(preprocessor.output()).export());
     assert_eq!(
         render(preprocessor.output()).export(),
-        "greeting = \"hi brett\";"
+        "\ngreeting = \"hi brett\";\n"
     );
 }
 
 #[test]
 fn chained_define() {
     let tokens = tokenize(
-        "#define NAME Brett\n#define SALUTATION Mr.\n#define HI \"Hi SALUTATION NAME\"\n\ngreeting = HI;\n",
+        "#define NAME HEMTT\n#define SALUTATION Mr.\n#define HI \"Hi SALUTATION NAME\"\n\ngreeting = HI;\n",
         "test_chained_define",
     )
     .unwrap();
@@ -48,6 +48,51 @@ fn chained_define() {
     println!("{:?}", render(preprocessor.output()).export());
     assert_eq!(
         render(preprocessor.output()).export(),
-        "greeting = \"Hi Mr. Brett\";"
+        "\ngreeting = \"Hi Mr. HEMTT\";\n"
+    );
+}
+
+#[test]
+fn undefine() {
+    let tokens = tokenize(
+        r#"
+#define affirmative true
+value = affirmative;
+#undef affirmative
+#ifdef affirmative
+defined = true;
+#else
+defined = false;
+#endif
+"#,
+        "test_undefine",
+    )
+    .unwrap();
+    let defines = Defines::new();
+    let preprocessor = Preprocessor::execute(&tokens, &defines).unwrap();
+    println!("{:?}", render(preprocessor.output()).export());
+    assert_eq!(
+        render(preprocessor.output()).export(),
+        "\nvalue = true;\n\ndefined = false;\n"
+    );
+}
+
+#[test]
+fn define_call() {
+    let tokens = tokenize(
+        r#"
+#define SAY_HI(NAME) Hi NAME
+
+value = "SAY_HI(HEMTT)";
+"#,
+        "test_undefine",
+    )
+    .unwrap();
+    let defines = Defines::new();
+    let preprocessor = Preprocessor::execute(&tokens, &defines).unwrap();
+    println!("{:?}", render(preprocessor.output()).export());
+    assert_eq!(
+        render(preprocessor.output()).export(),
+        "\n\nvalue = \"Hi HEMTT\";\n"
     );
 }

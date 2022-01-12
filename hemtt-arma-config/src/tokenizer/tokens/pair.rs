@@ -14,16 +14,17 @@ pub struct TokenPair<'a> {
 }
 
 impl<'a> TokenPair<'a> {
-    pub fn new<S: Into<String>>(path: S, pair: Pair<'a, Rule>) -> Self {
-        Self {
+    pub fn new<S: Into<String>>(path: S, pair: Pair<'a, Rule>) -> Result<Self, String> {
+        Ok(Self {
             path: path.into(),
             pair: Some(pair.clone()),
-            token: Token::from(pair),
+            token: Token::try_from(pair)?,
             start: RwLock::new(None),
             end: RwLock::new(None),
-        }
+        })
     }
 
+    #[must_use]
     pub fn anon(token: Token) -> Self {
         Self {
             path: String::new(),
@@ -50,14 +51,12 @@ impl<'a> TokenPair<'a> {
                 return Ok(pos);
             }
         }
-        let pos = if let Some(p) = &self.pair {
+        let pos = self.pair.as_ref().map_or((0, (0, 0)), |p| {
             (
                 p.as_span().start_pos().pos(),
                 p.as_span().start_pos().line_col(),
             )
-        } else {
-            (0, (0, 0))
-        };
+        });
         self.start.write().map_err(|e| e.to_string())?.replace(pos);
         Ok(pos)
     }
@@ -72,14 +71,13 @@ impl<'a> TokenPair<'a> {
                 return Ok(pos);
             }
         }
-        let pos = if let Some(p) = &self.pair {
+
+        let pos = self.pair.as_ref().map_or((0, (0, 0)), |p| {
             (
                 p.as_span().end_pos().pos(),
                 p.as_span().end_pos().line_col(),
             )
-        } else {
-            (0, (0, 0))
-        };
+        });
         self.end.write().map_err(|e| e.to_string())?.replace(pos);
         Ok(pos)
     }
@@ -96,7 +94,7 @@ impl<'a> TokenPair<'a> {
         &self.path
     }
 
-    pub fn token(&self) -> &Token {
+    pub const fn token(&self) -> &Token {
         &self.token
     }
 

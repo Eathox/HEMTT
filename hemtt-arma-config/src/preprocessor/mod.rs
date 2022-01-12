@@ -20,11 +20,13 @@ impl<'a, 'b> Preprocessor<'a> {
         })
     }
 
-    pub fn output(&'a self) -> &'a Vec<TokenPair<'a>> {
+    #[must_use]
+    pub const fn output(&'a self) -> &'a Vec<TokenPair<'a>> {
         &self.output
     }
 
-    pub fn source(&'a self) -> &'a Tokens<'a> {
+    #[must_use]
+    pub const fn source(&'a self) -> &'a Tokens<'a> {
         self.source
     }
 }

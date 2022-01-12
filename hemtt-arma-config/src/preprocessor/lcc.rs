@@ -12,7 +12,7 @@ pub struct LineColCounter {
 
 impl LineColCounter {
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             line: 1,
             col: 1,
@@ -45,27 +45,27 @@ impl LineColCounter {
     }
 
     #[must_use]
-    pub fn newline(&self) -> bool {
+    pub const fn newline(&self) -> bool {
         self.newline
     }
 
     #[must_use]
-    pub fn pos(&self) -> usize {
+    pub const fn pos(&self) -> usize {
         self.pos
     }
 
     #[must_use]
-    pub fn cols(&self) -> usize {
+    pub const fn cols(&self) -> usize {
         self.col
     }
 
     #[must_use]
-    pub fn line(&self) -> usize {
+    pub const fn line(&self) -> usize {
         self.line
     }
 
     #[must_use]
-    pub fn pos_linecol(&self) -> (usize, (usize, usize)) {
+    pub const fn pos_linecol(&self) -> (usize, (usize, usize)) {
         (self.pos, (self.line, self.col))
     }
 }

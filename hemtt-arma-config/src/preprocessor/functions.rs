@@ -2,6 +2,7 @@ use std::iter::Peekable;
 
 use crate::{
     preprocessor::ifstate::IfState,
+    render::render,
     tokenizer::tokens::{Token, TokenPair},
 };
 
@@ -15,7 +16,7 @@ macro_rules! push_token {
     }};
 }
 
-pub(crate) fn process_tokens<'a, 'b>(
+pub fn process_tokens<'a, 'b>(
     tokens: impl Iterator<Item = &'a TokenPair<'a>>,
     defines: &'b Defines<'a>,
 ) -> Result<Vec<TokenPair<'a>>, String> {
@@ -24,7 +25,6 @@ pub(crate) fn process_tokens<'a, 'b>(
     let mut ifstates = IfStates::new();
     let mut tokens = tokens.peekable();
     while let Some(pair) = tokens.peek() {
-        trace!("TokenPair: {:?}", pair);
         match (pair.token(), lcc.newline(), ifstates.reading()) {
             (Token::Directive, true, r) => {
                 lcc.mod_cols(tokens.next().unwrap()); // Consume #
@@ -40,13 +40,13 @@ pub(crate) fn process_tokens<'a, 'b>(
                         if let Token::LeftParenthesis =
                             skip_whitespace(&mut tokens, &mut lcc)?.token()
                         {
-                            defines.new_function(
-                                &name.0,
-                                read_args(&mut tokens, &mut lcc)?,
-                                read_define_value(&mut tokens, &mut lcc)?,
-                            );
+                            let args = read_args(&mut tokens, &mut lcc)?;
+                            println!("function {:?}", name);
+                            println!("args {:?}", args);
+                            let statement = read_define_value(&mut tokens, &mut lcc)?;
+                            println!("statement {:?}", statement);
+                            defines.new_function(&name.0, args, statement);
                         } else {
-                            println!("define word: {:?}", name);
                             defines.new_word(&name.0, read_define_value(&mut tokens, &mut lcc)?);
                         }
                     }
@@ -64,43 +64,53 @@ pub(crate) fn process_tokens<'a, 'b>(
                     }
                     ("ifdef", false) => {
                         ifstates.push(IfState::PassingChild);
+                        tokens.next();
                     }
                     ("ifndef", true) => {
                         let name = read_ident(&mut tokens, &mut lcc)?;
-                        if !defines.contains(&name.0) {
-                            ifstates.push(IfState::ReadingIf);
-                        } else {
+                        if defines.contains(&name.0) {
                             ifstates.push(IfState::PassingIf);
+                        } else {
+                            ifstates.push(IfState::ReadingIf);
                         }
                     }
                     ("ifndef", false) => {
                         ifstates.push(IfState::PassingChild);
+                        tokens.next();
                     }
                     ("else", _) => {
                         ifstates.flip();
+                        tokens.next();
                     }
                     ("endif", _) => {
                         ifstates.pop();
+                        tokens.next();
                     }
                     _ => {
                         panic!("Unsupported directive: {}", directive.token().to_string());
                     }
                 }
             }
-            (Token::Newline, _, _) => {
+            (Token::Newline, _, true) => {
+                lcc.add_line();
+                ret.push(tokens.next().unwrap().clone()); // Consume \n
+            }
+            (Token::Newline, _, false) => {
                 lcc.add_line();
                 tokens.next(); // Consume \n
             }
             (Token::EOI, _, _) => {
                 tokens.next(); // Consume EOI
             }
-            (Token::Word(_) | Token::Underscore, _, _) => {
-                println!("Resolving on {:?}", pair.token());
+            (Token::Word(_) | Token::Underscore, _, true) => {
                 ret.append(&mut resolve(&mut tokens, &mut lcc, defines)?);
             }
-            (_, _, _) => {
+            (_, _, true) => {
                 lcc.mod_cols(pair);
-                ret.push(tokens.next().unwrap().to_owned());
+                ret.push(tokens.next().unwrap().clone());
+            }
+            (_, _, false) => {
+                tokens.next();
             }
         }
     }
@@ -129,15 +139,14 @@ fn resolve<'a, 'b>(
                 if stack.is_empty() {
                     let ntp = tokens.next().unwrap();
                     lcc.mod_cols(ntp);
-                    return Ok(vec![ntp.to_owned()]);
+                    return Ok(vec![ntp.clone()]);
                 }
                 break;
             }
         }
     }
-    let mut stack: Vec<TokenPair<'a>> = stack.into_iter().map(|t| t.to_owned()).collect();
+    let mut stack: Vec<TokenPair<'a>> = stack.into_iter().cloned().collect();
     let original = stack.clone();
-    println!("about to check stack: {:?}", stack);
     while !stack.is_empty() {
         for i in (0..stack.len()).rev() {
             let s = stack.clone();
@@ -145,19 +154,39 @@ fn resolve<'a, 'b>(
                 &mut s.iter().take(i + 1).peekable(),
                 &mut LineColCounter::new(),
             )?;
-            println!("ident: {:?}", ident.0);
             if let Some(d) = defines.get(&ident.0) {
                 println!("found define: {:?}", d.statement());
-                return process_tokens(d.statement_ref().into_iter(), defines);
+                let defines = if let Some(args) = d.args() {
+                    if let Token::LeftParenthesis = tokens.peek().unwrap().token() {
+                        let inputs = read_args(tokens, lcc)?;
+                        println!("inputs {:?}", inputs);
+                        if inputs.len() != args.len() {
+                            return Err("Wrong number of arguments".to_string());
+                        }
+                        let defines = (*defines).clone();
+                        for (i, arg) in args.iter().enumerate() {
+                            defines.new_word(
+                                &render(&arg.iter().map(|a| (*a).clone()).collect::<Vec<_>>())
+                                    .export(),
+                                inputs[i].clone(),
+                            );
+                        }
+                        defines
+                    } else {
+                        return Err("Expected (".to_string());
+                    }
+                } else {
+                    defines.clone()
+                };
+                return process_tokens(d.statement_ref().into_iter(), &defines);
             }
         }
         stack.remove(0);
     }
-    println!("done checking stack");
     Ok(original)
 }
 
-pub(crate) fn read_ident<'a>(
+fn read_ident<'a>(
     tokens: &mut Peekable<impl Iterator<Item = &'a TokenPair<'a>>>,
     linecol: &mut LineColCounter,
 ) -> Result<
@@ -192,7 +221,7 @@ pub(crate) fn read_ident<'a>(
     Ok((ident, path, start, linecol.pos_linecol()))
 }
 
-pub(crate) fn read_args<'a>(
+pub fn read_args<'a>(
     tokens: &mut Peekable<impl Iterator<Item = &'a TokenPair<'a>>>,
     linecol: &mut LineColCounter,
 ) -> Result<Vec<Vec<&'a TokenPair<'a>>>, String> {
@@ -215,12 +244,11 @@ pub(crate) fn read_args<'a>(
             Token::RightParenthesis => {
                 if nested == 0 {
                     if !arg.is_empty() {
-                        args.push(arg)
+                        args.push(arg);
                     }
                     break;
-                } else {
-                    push_token!(tp, arg, linecol);
                 }
+                push_token!(tp, arg, linecol);
                 nested -= 1;
             }
             Token::Comma => {
@@ -241,7 +269,7 @@ pub(crate) fn read_args<'a>(
     Ok(args)
 }
 
-pub(crate) fn read_define_value<'a>(
+fn read_define_value<'a>(
     tokens: &mut Peekable<impl Iterator<Item = &'a TokenPair<'a>>>,
     linecol: &mut LineColCounter,
 ) -> Result<Vec<&'a TokenPair<'a>>, String> {
@@ -257,7 +285,7 @@ pub(crate) fn read_define_value<'a>(
         } else {
             match tp.token() {
                 Token::Newline => {
-                    ret.push(tp);
+                    // ret.push(tp);
                     linecol.add_line();
                     break;
                 }
@@ -274,7 +302,7 @@ pub(crate) fn read_define_value<'a>(
                 }
                 Token::EOI => break,
                 _ => {
-                    push_token!(tp, ret, linecol)
+                    push_token!(tp, ret, linecol);
                 }
             }
         }
@@ -282,7 +310,7 @@ pub(crate) fn read_define_value<'a>(
     Ok(ret)
 }
 
-pub(crate) fn skip_whitespace<'a>(
+fn skip_whitespace<'a>(
     tokens: &mut Peekable<impl Iterator<Item = &'a TokenPair<'a>>>,
     linecol: &mut LineColCounter,
 ) -> Result<&'a TokenPair<'a>, String> {
