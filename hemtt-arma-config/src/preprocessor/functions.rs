@@ -6,7 +6,7 @@ use crate::{
     tokenizer::tokens::{Token, TokenPair},
 };
 
-use super::{defines::Defines, ifstate::IfStates, lcc::LineColCounter};
+use super::{defines::Defines, holder::Holder, ifstate::IfStates, lcc::LineColCounter};
 
 macro_rules! push_token {
     ($i: ident, $to: ident, $lcc: ident) => {{
@@ -16,12 +16,13 @@ macro_rules! push_token {
     }};
 }
 
-pub fn process_tokens<'a, 'b>(
+pub fn process_tokens<'a, 'b, 'c>(
     tokens: impl Iterator<Item = &'a TokenPair<'a>>,
-    defines: &'b Defines<'a>,
-) -> Result<Vec<TokenPair<'a>>, String> {
-    let mut ret = Vec::new();
-    let mut lcc = LineColCounter::new();
+    lcc: &'b mut LineColCounter,
+    defines: &'b mut Defines<'a>,
+    holder: &'c Holder<'a>,
+) -> Result<Vec<&'a TokenPair<'a>>, String> {
+    let mut ret: Vec<&TokenPair> = Vec::new();
     let mut ifstates = IfStates::new();
     let mut tokens = tokens.peekable();
     while let Some(pair) = tokens.peek() {
@@ -36,26 +37,24 @@ pub fn process_tokens<'a, 'b>(
                 lcc.mod_cols(directive);
                 match (directive.token().to_string().as_str(), r) {
                     ("define", true) => {
-                        let name = read_ident(&mut tokens, &mut lcc)?;
-                        if let Token::LeftParenthesis =
-                            skip_whitespace(&mut tokens, &mut lcc)?.token()
-                        {
-                            let args = read_args(&mut tokens, &mut lcc)?;
+                        let name = read_ident(&mut tokens, lcc)?;
+                        if let Token::LeftParenthesis = skip_whitespace(&mut tokens, lcc)?.token() {
+                            let args = read_args(&mut tokens, lcc)?;
                             println!("function {:?}", name);
                             println!("args {:?}", args);
-                            let statement = read_define_value(&mut tokens, &mut lcc)?;
+                            let statement = read_define_value(&mut tokens, lcc)?;
                             println!("statement {:?}", statement);
                             defines.new_function(&name.0, args, statement);
                         } else {
-                            defines.new_word(&name.0, read_define_value(&mut tokens, &mut lcc)?);
+                            defines.new_word(&name.0, read_define_value(&mut tokens, lcc)?);
                         }
                     }
                     ("undef", true) => {
-                        let name = read_ident(&mut tokens, &mut lcc)?;
+                        let name = read_ident(&mut tokens, lcc)?;
                         defines.remove(&name.0);
                     }
                     ("ifdef", true) => {
-                        let name = read_ident(&mut tokens, &mut lcc)?;
+                        let name = read_ident(&mut tokens, lcc)?;
                         if defines.contains(&name.0) {
                             ifstates.push(IfState::ReadingIf);
                         } else {
@@ -67,7 +66,7 @@ pub fn process_tokens<'a, 'b>(
                         tokens.next();
                     }
                     ("ifndef", true) => {
-                        let name = read_ident(&mut tokens, &mut lcc)?;
+                        let name = read_ident(&mut tokens, lcc)?;
                         if defines.contains(&name.0) {
                             ifstates.push(IfState::PassingIf);
                         } else {
@@ -91,9 +90,26 @@ pub fn process_tokens<'a, 'b>(
                     }
                 }
             }
+            (Token::Directive, false, true) => {
+                lcc.mod_cols(tokens.next().unwrap()); // Consume #
+                let name = read_ident(&mut tokens, lcc)?;
+                println!("quoted name {:?}", name);
+                if let Some(ti) = holder.add(TokenPair::anon(Token::DoubleQuote)) {
+                    ret.push(holder.get(ti));
+                    ret.append(&mut resolve(
+                        &mut name.1.into_iter().peekable(),
+                        lcc,
+                        defines,
+                        holder,
+                    )?);
+                    ret.push(holder.get(ti));
+                } else {
+                    return Err("Too many tokens".to_string());
+                }
+            }
             (Token::Newline, _, true) => {
                 lcc.add_line();
-                ret.push(tokens.next().unwrap().clone()); // Consume \n
+                ret.push(tokens.next().unwrap()); // Consume \n
             }
             (Token::Newline, _, false) => {
                 lcc.add_line();
@@ -103,11 +119,11 @@ pub fn process_tokens<'a, 'b>(
                 tokens.next(); // Consume EOI
             }
             (Token::Word(_) | Token::Underscore, _, true) => {
-                ret.append(&mut resolve(&mut tokens, &mut lcc, defines)?);
+                ret.append(&mut resolve(&mut tokens, lcc, defines, holder)?);
             }
             (_, _, true) => {
                 lcc.mod_cols(pair);
-                ret.push(tokens.next().unwrap().clone());
+                ret.push(tokens.next().unwrap());
             }
             (_, _, false) => {
                 tokens.next();
@@ -117,11 +133,12 @@ pub fn process_tokens<'a, 'b>(
     Ok(ret)
 }
 
-fn resolve<'a, 'b>(
+fn resolve<'a, 'b, 'c>(
     tokens: &mut Peekable<impl Iterator<Item = &'a TokenPair<'a>>>,
     lcc: &mut LineColCounter,
-    defines: &'b Defines<'a>,
-) -> Result<Vec<TokenPair<'a>>, String> {
+    defines: &'b mut Defines<'a>,
+    holder: &'c Holder<'a>,
+) -> Result<Vec<&'a TokenPair<'a>>, String> {
     skip_whitespace(tokens, lcc)?;
     // Find the entire haystack
     let mut stack = Vec::new();
@@ -139,38 +156,57 @@ fn resolve<'a, 'b>(
                 if stack.is_empty() {
                     let ntp = tokens.next().unwrap();
                     lcc.mod_cols(ntp);
-                    return Ok(vec![ntp.clone()]);
+                    return Ok(vec![ntp]);
                 }
                 break;
             }
         }
     }
-    let mut stack: Vec<TokenPair<'a>> = stack.into_iter().cloned().collect();
+    let mut stack: Vec<&'a TokenPair<'a>> = stack.into_iter().collect();
     let original = stack.clone();
     while !stack.is_empty() {
         for i in (0..stack.len()).rev() {
             let s = stack.clone();
             let ident = read_ident(
-                &mut s.iter().take(i + 1).peekable(),
+                &mut s.into_iter().take(i + 1).peekable(),
                 &mut LineColCounter::new(),
             )?;
             if let Some(d) = defines.get(&ident.0) {
                 println!("found define: {:?}", d.statement());
-                let defines = if let Some(args) = d.args() {
+                let mut defines = if let Some(args) = d.args() {
                     if let Token::LeftParenthesis = tokens.peek().unwrap().token() {
                         let inputs = read_args(tokens, lcc)?;
                         println!("inputs {:?}", inputs);
                         if inputs.len() != args.len() {
                             return Err("Wrong number of arguments".to_string());
                         }
+                        let mut processed_input = Vec::with_capacity(inputs.len());
+                        for arg in inputs.into_iter() {
+                            processed_input.push(process_tokens(
+                                arg.into_iter(),
+                                lcc,
+                                defines,
+                                holder,
+                            )?);
+                        }
                         let defines = (*defines).clone();
                         for (i, arg) in args.iter().enumerate() {
-                            defines.new_word(
-                                &render(&arg.iter().map(|a| (*a).clone()).collect::<Vec<_>>())
-                                    .export(),
-                                inputs[i].clone(),
-                            );
+                            defines.new_word(&render(arg).export(), {
+                                let mut inarg: &Vec<&TokenPair> = &processed_input[i];
+                                let mut borrowed_defines = vec![];
+                                loop {
+                                    if let Some(pd) = defines.get(&render(inarg).export()) {
+                                        println!("found parent define: {:?}", pd.statement());
+                                        borrowed_defines.push(pd);
+                                        inarg = borrowed_defines[borrowed_defines.len() - 1]
+                                            .statement_ref();
+                                    } else {
+                                        break inarg.to_vec();
+                                    }
+                                }
+                            });
                         }
+                        println!("defines {:?}", defines);
                         defines
                     } else {
                         return Err("Expected (".to_string());
@@ -178,7 +214,7 @@ fn resolve<'a, 'b>(
                 } else {
                     defines.clone()
                 };
-                return process_tokens(d.statement_ref().into_iter(), &defines);
+                return process_tokens(d.statement().into_iter(), lcc, &mut defines, holder);
             }
         }
         stack.remove(0);
@@ -192,6 +228,7 @@ fn read_ident<'a>(
 ) -> Result<
     (
         String,
+        Vec<&'a TokenPair<'a>>,
         Option<String>,
         (usize, (usize, usize)),
         (usize, (usize, usize)),
@@ -200,6 +237,7 @@ fn read_ident<'a>(
 > {
     skip_whitespace(tokens, linecol)?;
     let mut ident = String::new();
+    let mut ret = Vec::new();
     let start = linecol.pos_linecol();
     let mut path = None;
     while let Some(tp) = tokens.peek() {
@@ -208,17 +246,17 @@ fn read_ident<'a>(
             Token::Word(w) => {
                 ident.push_str(w.as_str());
                 linecol.mod_cols(tp);
-                tokens.next();
+                ret.push(tokens.next().unwrap());
             }
             Token::Underscore => {
                 ident.push('_');
                 linecol.mod_cols(tp);
-                tokens.next();
+                ret.push(tokens.next().unwrap());
             }
             _ => break,
         }
     }
-    Ok((ident, path, start, linecol.pos_linecol()))
+    Ok((ident, ret, path, start, linecol.pos_linecol()))
 }
 
 pub fn read_args<'a>(

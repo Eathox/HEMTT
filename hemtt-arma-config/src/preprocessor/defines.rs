@@ -4,7 +4,7 @@ use crate::tokenizer::tokens::TokenPair;
 
 pub type DefineArgs<'a> = Vec<Vec<&'a TokenPair<'a>>>;
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct Defines<'a> {
     defines: Mutex<HashMap<String, Define<'a>>>,
 }
@@ -58,7 +58,7 @@ impl Clone for Defines<'_> {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Define<'a> {
     args: Option<DefineArgs<'a>>,
     statement: Vec<&'a TokenPair<'a>>,
@@ -87,14 +87,12 @@ impl<'a> Define<'a> {
     }
 
     #[must_use]
-    pub fn statement(&self) -> Vec<TokenPair<'a>> {
-        self.statement.clone().into_iter().cloned().collect()
-    }
-
-    pub fn statement_ref(&self) -> Vec<&'a TokenPair<'a>> {
+    pub fn statement(&self) -> Vec<&'a TokenPair<'a>> {
         self.statement.clone()
     }
-}
 
-#[cfg(test)]
-mod tests {}
+    #[must_use]
+    pub const fn statement_ref(&self) -> &Vec<&'a TokenPair<'a>> {
+        &self.statement
+    }
+}

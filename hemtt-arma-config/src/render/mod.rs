@@ -6,7 +6,7 @@ pub use self::rendered::Rendered;
 
 mod rendered;
 
-pub fn render<'a>(source: &'a [TokenPair<'a>]) -> Rendered {
+pub fn render<'a>(source: &'a [&'a TokenPair<'a>]) -> Rendered {
     let mut map = HashMap::new();
     let mut line = Vec::new();
     let mut lc = 1;
