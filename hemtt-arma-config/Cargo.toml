@@ -24,10 +24,10 @@ maps = ["serde", "serde_json"]
 [dev-dependencies]
 criterion = "0.3"
 
-[[bench]]
-name = "basic_class"
-harness = false
+# [[bench]]
+# name = "basic_class"
+# harness = false
 
-[[bench]]
-name = "cba"
-harness = false
+# [[bench]]
+# name = "cba"
+# harness = false

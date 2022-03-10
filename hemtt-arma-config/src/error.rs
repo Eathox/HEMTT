@@ -1,7 +1,5 @@
 use thiserror::Error;
 
-use crate::preprocess::TokenPos;
-
 pub trait PrintableError<T, E> {
     fn unwrap_or_print(self) -> T;
 }
@@ -32,12 +30,6 @@ pub enum ArmaConfigError {
         expected: usize,
         actual: usize,
         args: Vec<String>,
-    },
-    DefineWithoutName {
-        token: TokenPos,
-    },
-    UndefineWithoutName {
-        token: TokenPos,
     },
 
     // Wrappers
@@ -81,12 +73,6 @@ impl std::fmt::Display for ArmaConfigError {
                 "Expected {} arguments, got {}: {:?}",
                 expected, actual, args
             ),
-            Self::DefineWithoutName { ref token } => {
-                write!(f, "Expected a name after define, at {:?}", token)
-            }
-            Self::UndefineWithoutName { ref token } => {
-                write!(f, "Expected a name after undef, at {:?}", token)
-            }
         }
     }
 }

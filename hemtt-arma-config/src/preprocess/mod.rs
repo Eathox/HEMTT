@@ -1,589 +1,447 @@
-use std::collections::HashMap;
 use std::iter::Peekable;
-use std::vec::IntoIter;
 
-use pest::error::Error;
-use pest::Parser;
+use crate::{
+    preprocess::{defines::Define, ifstate::IfState},
+    tokenizer::{Token, TokenPair, Tokens},
+    ArmaConfigError,
+};
 
-mod token;
-#[cfg(test)]
-use token::Whitespace;
-pub use token::{PreProcessParser, Rule, Token, TokenPos};
+mod defines;
+use defines::Defines;
 
-mod render;
-pub use render::render;
-
-mod define;
-use define::Define;
 mod ifstate;
-use ifstate::{IfState, IfStates};
+use ifstate::IfStates;
 
-use crate::{resolver::Resolver, ArmaConfigError};
+mod linecol;
+use linecol::LineColCounter;
 
-pub fn tokenize(source: &str, path: &str) -> Result<Vec<TokenPos>, Error<Rule>> {
-    let mut tokens = Vec::new();
+macro_rules! push_token {
+    ($i: ident, $to: ident, $lc: ident) => {{
+        let ctp = $i.clone();
+        $lc.mod_cols(ctp);
+        $to.push(ctp);
+    }};
+}
 
-    let pairs = PreProcessParser::parse(Rule::file, source)?;
-    for pair in pairs {
-        tokens.push(TokenPos::new(path, pair))
+pub struct Preprocessor<'a> {
+    defines: Defines<'a>,
+    output: Vec<&'a TokenPair<'a>>,
+}
+
+impl<'a> Preprocessor<'a> {
+    pub fn output(&'a self) -> &'a Vec<&'a TokenPair<'a>> {
+        &self.output
     }
 
-    Ok(tokens)
-}
+    pub fn execute(root: &'a Tokens<'a>) -> Result<Self, ArmaConfigError> {
+        let mut preprocessor = Self {
+            defines: Defines::new(),
+            output: Vec::new(),
+        };
+        let mut linecol = LineColCounter::new();
+        let mut tokens = root.iter().peekable();
+        preprocessor.output =
+            Self::process_tokens_peekable(&mut tokens, &mut linecol, &mut preprocessor.defines)?;
+        Ok(preprocessor)
+    }
 
-macro_rules! skip_whitespace {
-    ($i: ident) => {{
-        let mut next = $i.peek();
-        loop {
-            if let Some(tp) = next {
-                if tp.token().is_whitespace() {
-                    $i.next();
-                    next = $i.peek();
-                } else {
-                    break;
-                }
-            } else {
-                break;
-            }
-        }
-    }};
-}
-
-macro_rules! read_args {
-    ($i: ident) => {{
-        let mut ret: Vec<Vec<TokenPos>> = Vec::new();
-        let mut next = $i.next();
-        let mut arg: Vec<TokenPos> = Vec::new();
-        let mut level = 0;
-        if let Some(ref tp) = next {
-            if let Token::LeftParenthesis = tp.token() {
-                next = $i.next();
-            }
-        }
-        loop {
-            if let Some(tp) = next {
-                match tp.token() {
-                    Token::LeftParenthesis => {
-                        level += 1;
-                        arg.push(TokenPos::anon(Token::LeftParenthesis));
-                    }
-                    Token::RightParenthesis => {
-                        if level == 0 {
-                            if !arg.is_empty() {
-                                ret.push(arg);
-                            }
-                            break;
-                        } else {
-                            arg.push(TokenPos::anon(Token::RightParenthesis));
-                        }
-                        level -= 1;
-                    }
-                    Token::Comma => {
-                        if level == 0 {
-                            if !arg.is_empty() {
-                                ret.push(arg);
-                                arg = Vec::new();
-                            }
-                        } else {
-                            arg.push(TokenPos::anon(Token::Comma));
-                        }
-                    }
-                    _ => arg.push(tp),
-                }
-            } else {
-                break;
-            }
-            next = $i.next();
-        }
-        ret
-    }};
-}
-
-macro_rules! read_line {
-    ($i: ident) => {{
-        let mut ret: Vec<TokenPos> = Vec::new();
-        let mut next = $i.next();
-        // Skip initial whitespace
-        loop {
-            if let Some(tp) = &next {
-                if tp.token().is_whitespace() {
-                    next = $i.next();
-                } else {
-                    break;
-                }
-            } else {
-                break;
-            }
-        }
-        let mut is_quoted = false;
-        loop {
-            if let Some(tp) = next {
-                if is_quoted {
-                    if tp.token() == &Token::DoubleQuote {
-                        is_quoted = false;
-                    }
-                    ret.push(tp);
-                    next = $i.next();
-                } else {
-                    match tp.token() {
-                        Token::Newline => break,
-                        Token::Escape => {
-                            let mut skip = false;
-                            if let Some(tp) = $i.peek() {
-                                if tp.token() == &Token::Newline {
-                                    ret.push(tp.clone());
-                                    $i.next();
-                                    skip = true;
-                                }
-                            }
-                            next = $i.next();
-                            if !skip {
-                                let mut first = true;
-                                loop {
-                                    if let Some(ref ntp) = next {
-                                        if ntp.token().is_whitespace() {
-                                            next = $i.next();
-                                            first = false;
-                                        } else if first {
-                                            ret.push(tp.clone());
-                                            break;
-                                        } else {
-                                            break;
-                                        }
-                                    } else {
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                        Token::DoubleQuote => {
-                            ret.push(tp);
-                            next = $i.next();
-                            is_quoted = true;
-                        }
-                        _ => {
-                            ret.push(tp);
-                            next = $i.next();
-                        }
-                    }
-                }
-            } else {
-                break;
-            }
-        }
-        ret
-    }};
-}
-
-pub fn _resolve<R>(
-    ident: &str,
-    define: &Define,
-    root: &str,
-    resolver: R,
-    defines: &HashMap<String, Define>,
-) -> Result<Option<Vec<TokenPos>>, ArmaConfigError>
-where
-    R: Resolver,
-{
-    Ok(if let Some(d) = defines.get(ident) {
+    fn process_tokens_peekable<'b>(
+        tokens: &mut Peekable<impl Iterator<Item = &'b TokenPair<'b>>>,
+        linecol: &mut LineColCounter,
+        defines: &mut Defines<'b>,
+    ) -> Result<Vec<&'b TokenPair<'b>>, ArmaConfigError> {
+        let mut ifstate = IfStates::new();
         let mut ret = Vec::new();
-        let mut context = defines.to_owned();
-        if let Some(dargs) = &d.args {
-            if let Some(args) = &define.args {
-                if dargs.len() != args.len() {
-                    return Err(ArmaConfigError::ArgCoundMismatch {
-                        expected: args.len(),
-                        actual: dargs.len(),
-                        args: args.iter().map(|a| render(a.to_vec()).export()).collect(),
-                    });
-                }
-                for i in 0..dargs.len() {
-                    if let Token::Word(key) = &dargs[i][0].token() {
-                        if args[i].len() == 1 {
-                            if let Token::Word(value) = &args[i][0].token() {
-                                context.insert(
-                                    key.to_owned(),
-                                    if let Some(ed) = defines.get(value) {
-                                        ed.to_owned()
-                                    } else {
-                                        Define {
-                                            args: None,
-                                            statement: vec![args[i][0].to_owned()],
-                                            call: false,
-                                        }
-                                    },
-                                );
-                            }
-                        } else {
-                            context.insert(
-                                key.to_owned(),
-                                Define {
-                                    args: None,
-                                    statement: args[i].to_owned(),
-                                    call: false,
-                                },
-                            );
-                        }
+        while let Some(tpeek) = tokens.peek() {
+            trace!("Token: {:?}", tpeek.token());
+            match (tpeek.token(), linecol.newline(), ifstate.reading()) {
+                (Token::Directive, true, if_reading) => {
+                    linecol.mod_cols(tokens.next().unwrap()); // Consume #
+                    let action = tokens.next();
+                    if action.is_none() {
+                        panic!("Directive without action");
                     }
-                }
-            }
-        }
-        let mut iter = d.statement.clone().into_iter().peekable();
-        while let Some(token) = iter.next() {
-            match &token.token() {
-                Token::Directive => {
-                    if let Some(tp) = iter.peek() {
-                        match tp.token() {
-                            Token::Word(_) => {
-                                if let Token::Word(w) = iter.next().unwrap().token() {
-                                    ret.push(TokenPos::with_pos(Token::DoubleQuote, &token));
-                                    ret.append(&mut _resolve_word(
-                                        &mut iter,
-                                        w,
-                                        &token,
-                                        root,
-                                        resolver.clone(),
-                                        &mut context,
-                                    )?);
-                                    ret.push(TokenPos::with_pos(Token::DoubleQuote, &token));
-                                }
-                            }
-                            Token::Directive => {
-                                iter.next();
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                Token::Word(w) => {
-                    ret.append(&mut _resolve_word(
-                        &mut iter,
-                        w,
-                        &token,
-                        root,
-                        resolver.clone(),
-                        &mut context,
-                    )?);
-                }
-                _ => ret.push(token.to_owned()),
-            }
-        }
-        Some(ret)
-    } else {
-        None
-    })
-}
-
-fn _resolve_word<R>(
-    iter: &mut Peekable<IntoIter<TokenPos>>,
-    ident: &str,
-    token: &TokenPos,
-    root: &str,
-    resolver: R,
-    mut defines: &mut HashMap<String, Define>,
-) -> Result<Vec<TokenPos>, ArmaConfigError>
-where
-    R: Resolver,
-{
-    if let Some(d2) = defines.get(ident) {
-        if d2.call {
-            if let Some(r) = _resolve(
-                ident,
-                &Define {
-                    call: false,
-                    args: Some(
-                        read_args!(iter)
-                            .into_iter()
-                            .map(|arg| _preprocess(arg, root, resolver.clone(), &mut defines))
-                            .collect::<Result<Vec<Vec<TokenPos>>, ArmaConfigError>>()
-                            .unwrap(),
-                    ),
-                    statement: Vec::new(),
-                },
-                root,
-                resolver,
-                defines,
-            )? {
-                return Ok(r);
-            }
-        } else if let Some(r) = _resolve(ident, d2, root, resolver, defines)? {
-            return Ok(r);
-        } else {
-            return Ok(vec![token.to_owned()]);
-        }
-    }
-    Ok(vec![token.to_owned()])
-}
-
-pub fn preprocess<R>(
-    source: Vec<TokenPos>,
-    root: &str,
-    resolver: R,
-) -> Result<Vec<TokenPos>, ArmaConfigError>
-where
-    R: Resolver,
-{
-    let mut defines: HashMap<String, Define> = HashMap::new();
-    _preprocess(source, root, resolver, &mut defines)
-}
-
-pub fn _preprocess<R>(
-    source: Vec<TokenPos>,
-    root: &str,
-    resolver: R,
-    mut defines: &mut std::collections::HashMap<std::string::String, define::Define>,
-) -> Result<Vec<TokenPos>, ArmaConfigError>
-where
-    R: Resolver,
-{
-    let mut ret = Vec::new();
-    let mut iter = source.into_iter().peekable();
-    let mut if_state = IfStates::new();
-    let mut new_line = true;
-    while let Some(token) = iter.next() {
-        match (&token.token(), if_state.reading(), new_line) {
-            (Token::Directive, r, true) => {
-                if let Token::Word(directive) = iter.next().unwrap().token() {
-                    match (directive.as_str(), r) {
+                    let action = action.unwrap();
+                    linecol.mod_cols(action);
+                    match (action.token().to_string().as_str(), if_reading) {
                         ("define", true) => {
-                            skip_whitespace!(iter);
-                            if let Some(tp) = iter.next() {
-                                if let Token::Word(name) = tp.token() {
-                                    // skip_whitespace!(iter);
-                                    let args = if let Some(tp) = iter.peek() {
-                                        if tp.token() == &Token::LeftParenthesis {
-                                            let args = read_args!(iter)
-                                                .into_iter()
-                                                .map(|arg| {
-                                                    _preprocess(
-                                                        arg,
-                                                        root,
-                                                        resolver.clone(),
-                                                        &mut defines,
-                                                    )
-                                                })
-                                                .collect::<Result<Vec<Vec<TokenPos>>, ArmaConfigError>>()
-                                                .unwrap();
-                                            Some(args)
-                                        } else {
-                                            None
-                                        }
-                                    } else {
-                                        None
-                                    };
-                                    let body = read_line!(iter);
-                                    defines.insert(
-                                        name.to_owned(),
-                                        Define {
-                                            call: args.is_some(),
-                                            args,
-                                            statement: body,
-                                        },
-                                    );
-                                } else {
-                                    return Err(ArmaConfigError::DefineWithoutName { token: tp });
-                                }
+                            let name = Self::read_ident(tokens, linecol)?;
+                            if let Token::LeftParenthesis =
+                                Self::skip_whitespace(tokens, linecol)?.token()
+                            {
+                                let args = Self::read_args(tokens, linecol)?;
+                                defines.new_function(
+                                    &name.0,
+                                    args,
+                                    Self::read_define_value(tokens, linecol)?,
+                                );
                             } else {
-                                return Err(ArmaConfigError::DefineWithoutName { token });
+                                defines
+                                    .new_word(&name.0, Self::read_define_value(tokens, linecol)?);
                             }
                         }
                         ("undef", true) => {
-                            skip_whitespace!(iter);
-                            if let Some(tp) = iter.next() {
-                                if let Token::Word(name) = tp.token().clone() {
-                                    defines.remove(&name);
-                                } else {
-                                    return Err(ArmaConfigError::UndefineWithoutName { token: tp });
-                                }
-                            } else {
-                                return Err(ArmaConfigError::UndefineWithoutName { token });
-                            }
+                            defines.remove(&Self::read_ident(tokens, linecol)?.0);
                         }
                         ("ifdef", true) => {
-                            skip_whitespace!(iter);
-                            if let Some(tp) = iter.next() {
-                                if let Token::Word(name) = tp.token().clone() {
-                                    if defines.contains_key(&name) {
-                                        if_state.push(IfState::ReadingIf);
-                                    } else {
-                                        if_state.push(IfState::PassingIf);
-                                    }
-                                }
+                            let name = Self::read_ident(tokens, linecol)?;
+                            if defines.defined(&name.0) {
+                                ifstate.push(IfState::ReadingIf);
+                            } else {
+                                ifstate.push(IfState::PassingIf);
                             }
                         }
                         ("ifndef", true) => {
-                            skip_whitespace!(iter);
-                            if let Some(tp) = iter.next() {
-                                if let Token::Word(name) = tp.token().clone() {
-                                    if defines.contains_key(&name) {
-                                        if_state.push(IfState::PassingIf);
-                                    } else {
-                                        if_state.push(IfState::ReadingIf);
-                                    }
-                                }
+                            let name = Self::read_ident(tokens, linecol)?;
+                            if !defines.defined(&name.0) {
+                                ifstate.push(IfState::ReadingIf);
+                            } else {
+                                ifstate.push(IfState::PassingIf);
                             }
                         }
                         ("ifdef", false) => {
-                            if_state.push(IfState::PassingChild);
+                            ifstate.push(IfState::PassingChild);
                         }
                         ("ifndef", false) => {
-                            if_state.push(IfState::PassingChild);
+                            ifstate.push(IfState::PassingChild);
                         }
-                        ("else", _) => if_state.flip(),
+                        ("else", _) => {
+                            ifstate.flip();
+                        }
                         ("endif", _) => {
-                            if_state.pop();
-                        }
-                        ("include", true) => {
-                            let file = render(read_line!(iter))
-                                .export()
-                                .trim_matches('"')
-                                .to_owned();
-                            ret.append(&mut _preprocess(
-                                {
-                                    let resolved = resolver.resolve(root, token.path(), &file)?;
-                                    super::tokenize(resolved.data(), resolved.path()).unwrap()
-                                },
-                                root,
-                                resolver.clone(),
-                                defines,
-                            )?);
+                            ifstate.pop();
                         }
                         (_, false) => {
-                            read_line!(iter);
+                            linecol.mod_cols(tokens.next().unwrap());
                         }
-                        (_, true) => {
-                            error!(
-                                "Unknown directive: {:?} at {}:{}",
-                                directive,
-                                token.path(),
-                                token.start().0
+                        _ => panic!("Unknown directive"),
+                    }
+                    if let Token::Newline = Self::skip_whitespace(tokens, linecol)?.token() {
+                        linecol.add_line();
+                        tokens.next(); // Consume \n
+                    } else {
+                        println!("extra tokens after undefine");
+                    }
+                    // let ident = Self::read_ident(&mut tokens, &mut linecol);
+                }
+                (Token::Newline, _, append) => {
+                    linecol.add_line();
+                    // Consume \n
+                    if append {
+                        ret.push(tokens.next().unwrap());
+                    } else {
+                        tokens.next();
+                    }
+                }
+                (Token::EOI, _, _) => {
+                    tokens.next();
+                }
+                (Token::Word(_) | Token::Underscore, _, true) => {
+                    println!("Resolving on {:?}", tpeek.token());
+                    ret.append(&mut Self::resolve(tokens, linecol, defines)?);
+                }
+                (_, _, true) => {
+                    linecol.mod_cols(tpeek);
+                    ret.push(tokens.next().unwrap());
+                }
+                (_, _, false) => {
+                    linecol.mod_cols(tokens.next().unwrap());
+                }
+            }
+        }
+        Ok(ret)
+    }
+
+    fn read_ident<'b>(
+        tokens: &mut Peekable<impl Iterator<Item = &'b TokenPair<'b>>>,
+        linecol: &mut LineColCounter,
+    ) -> Result<
+        (
+            String,
+            Option<String>,
+            (usize, (usize, usize)),
+            (usize, (usize, usize)),
+        ),
+        ArmaConfigError,
+    > {
+        Self::skip_whitespace(tokens, linecol)?;
+        let mut ident = String::new();
+        let start = linecol.pos_linecol();
+        let mut path = None;
+        while let Some(tpeek) = tokens.peek() {
+            path = Some(tpeek.path().to_string());
+            match tpeek.token() {
+                Token::Word(w) => {
+                    ident.push_str(w.as_str());
+                    linecol.mod_cols(tpeek);
+                    tokens.next();
+                }
+                Token::Underscore => {
+                    ident.push('_');
+                    linecol.mod_cols(tpeek);
+                    tokens.next();
+                }
+                _ => break,
+            }
+        }
+        Ok((ident, path, start, linecol.pos_linecol()))
+    }
+
+    fn read_args<'b>(
+        tokens: &mut Peekable<impl Iterator<Item = &'b TokenPair<'b>>>,
+        linecol: &mut LineColCounter,
+    ) -> Result<Vec<Vec<&'b TokenPair<'b>>>, ArmaConfigError> {
+        if let Token::LeftParenthesis = Self::skip_whitespace(tokens, linecol)?.token() {
+            linecol.add_cols(&Token::LeftParenthesis);
+            tokens.next();
+        } else {
+            panic!("Expected ( but found something else")
+        }
+        let mut args = Vec::new();
+        let mut arg = Vec::new();
+        let mut nested = 0;
+
+        while let Some(tnext) = &tokens.next() {
+            match tnext.token() {
+                Token::LeftParenthesis => {
+                    nested += 1;
+                    push_token!(tnext, arg, linecol);
+                }
+                Token::RightParenthesis => {
+                    if nested == 0 {
+                        if !arg.is_empty() {
+                            args.push(arg)
+                        }
+                        break;
+                    } else {
+                        push_token!(tnext, arg, linecol);
+                    }
+                    nested -= 1;
+                }
+                Token::Comma => {
+                    if nested == 0 {
+                        if !arg.is_empty() {
+                            args.push(arg);
+                            arg = Vec::new();
+                        }
+                    } else {
+                        push_token!(tnext, arg, linecol);
+                    }
+                }
+                _ => {
+                    push_token!(tnext, arg, linecol);
+                }
+            }
+        }
+        Ok(args)
+    }
+
+    fn read_define_value<'b>(
+        tokens: &mut Peekable<impl Iterator<Item = &'b TokenPair<'b>>>,
+        linecol: &mut LineColCounter,
+    ) -> Result<Vec<&'b TokenPair<'b>>, ArmaConfigError> {
+        Self::skip_whitespace(tokens, linecol)?;
+        let mut ret = Vec::new();
+        let mut quoted = false;
+        while let Some(tnext) = &tokens.next() {
+            if quoted {
+                if &Token::DoubleQuote == tnext.token() {
+                    quoted = false;
+                }
+                push_token!(tnext, ret, linecol);
+            } else {
+                match tnext.token() {
+                    Token::Newline => {
+                        // ret.push(tp);
+                        linecol.add_line();
+                        break;
+                    }
+                    Token::Escape => {
+                        if let Some(etp) = tokens.peek() {
+                            if &Token::Newline == etp.token() {
+                                push_token!(etp, ret, linecol);
+                            }
+                        }
+                    }
+                    Token::DoubleQuote => {
+                        push_token!(tnext, ret, linecol);
+                        quoted = true;
+                    }
+                    Token::EOI => break,
+                    _ => {
+                        push_token!(tnext, ret, linecol)
+                    }
+                }
+            }
+        }
+        Ok(ret)
+    }
+
+    fn resolve<'b>(
+        tokens: &mut Peekable<impl Iterator<Item = &'b TokenPair<'b>>>,
+        linecol: &mut LineColCounter,
+        defines: &mut Defines<'b>,
+    ) -> Result<Vec<&'b TokenPair<'b>>, ArmaConfigError> {
+        Self::skip_whitespace(tokens, linecol)?;
+        // Find the entire haystack
+        let mut stack = Vec::new();
+        while let Some(tpeek) = tokens.peek() {
+            match tpeek.token() {
+                Token::Word(_) => {
+                    push_token!(tpeek, stack, linecol);
+                    tokens.next();
+                }
+                Token::Underscore => {
+                    push_token!(tpeek, stack, linecol);
+                    tokens.next();
+                }
+                Token::DoubleQuote => {
+                    push_token!(tpeek, stack, linecol);
+                    tokens.next();
+                }
+                _ => {
+                    if stack.is_empty() {
+                        let ntp = tokens.next().unwrap();
+                        linecol.mod_cols(ntp);
+                        return Ok(vec![ntp]);
+                    }
+                    break;
+                }
+            }
+        }
+        // let mut stack: Vec<TokenPair<'b>> = stack.into_iter().map(|t| t.to_owned()).collect();
+        let original = stack.clone();
+        while !stack.is_empty() {
+            for i in (0..stack.len()).rev() {
+                let s = stack.clone();
+                let ident = Self::read_ident(
+                    &mut s.into_iter().take(i + 1).peekable(),
+                    &mut LineColCounter::new(),
+                )?;
+                println!("ident: {:?}", ident.0);
+                if let Some(d) = defines.get(&ident.0) {
+                    println!("found define: {:?}", d.statement());
+                    let mut scoped_defines = Defines::new();
+                    defines.all().iter().for_each(|(k, v)| {
+                        scoped_defines.new_define(k, v.clone());
+                    });
+                    match d {
+                        Define::Word(w) => {
+                            return Self::process_tokens_peekable(
+                                &mut w.into_iter().peekable(),
+                                linecol,
+                                &mut scoped_defines,
                             );
-                            read_line!(iter);
+                        }
+                        Define::Function(ref f) => {
+                            if let Token::LeftParenthesis =
+                                Self::skip_whitespace(tokens, linecol)?.token()
+                            {
+                                tokens.next(); // Consume (
+                                for arg in f.args().clone() {
+                                    // let arg_clone = arg.clone().into_iter().map(|t| (*t).to_owned()).collect::<Vec<_>>();
+                                    scoped_defines.new_word(
+                                        &Self::read_ident(
+                                            &mut arg.clone().into_iter().peekable(),
+                                            &mut LineColCounter::new(),
+                                        )?
+                                        .0,
+                                        Self::read_call_arg(tokens, linecol, defines)?,
+                                    );
+                                }
+                            } else {
+                                panic!("Expected ( but found something else")
+                            }
+                            println!("scoped defines: {:?}", scoped_defines);
+                            panic!();
+                            return Self::process_tokens_peekable(
+                                &mut d.statement().into_iter().peekable(),
+                                linecol,
+                                &mut scoped_defines,
+                            );
                         }
                     }
                 }
             }
-            (Token::Word(text), true, _) => {
-                if defines.contains_key(text) {
-                    ret.append(
-                        &mut _resolve(
-                            text,
-                            &Define {
-                                call: false,
-                                args: if let Some(tp) = iter.peek() {
-                                    if tp.token() == &Token::LeftParenthesis {
-                                        Some(
-                                            read_args!(iter)
-                                                .into_iter()
-                                                .map(|arg| {
-                                                    _preprocess(
-                                                        arg,
-                                                        root,
-                                                        resolver.clone(),
-                                                        &mut defines,
-                                                    )
-                                                })
-                                                .collect::<Result<Vec<Vec<TokenPos>>, ArmaConfigError>>()
-                                                .unwrap(),
-                                        )
-                                    } else {
-                                        None
-                                    }
-                                } else {
-                                    None
-                                },
-                                statement: Vec::new(),
-                            },
-                            root,
-                            resolver.clone(),
-                            defines,
-                        )?
-                        .unwrap(),
-                    );
-                } else {
-                    ret.push(token);
+            stack.remove(0);
+        }
+        println!("done checking stack");
+        Ok(original)
+    }
+
+    fn read_call_arg<'b>(
+        tokens: &mut Peekable<impl Iterator<Item = &'b TokenPair<'b>>>,
+        linecol: &mut LineColCounter,
+        defines: &mut Defines<'b>,
+    ) -> Result<Vec<&'b TokenPair<'b>>, ArmaConfigError> {
+        let mut ret = Vec::new();
+        while let Some(tnext) = &tokens.next() {
+            match tnext.token() {
+                Token::Comma | Token::RightParenthesis => return Ok(ret),
+                _ => {
+                    linecol.mod_cols(tnext);
+                    push_token!(tnext, ret, linecol);
                 }
             }
-            (Token::Newline, true, _) => {
-                new_line = true;
-                ret.push(token);
-            }
-            (Token::Whitespace(_), true, _) => {
-                ret.push(token);
-            }
-            (_, true, _) => {
-                new_line = false;
-                ret.push(token);
-            }
-            _ => {}
         }
+        Self::process_tokens_peekable(&mut ret.into_iter().peekable(), linecol, defines)
     }
-    Ok(ret)
+
+    fn skip_whitespace<'b>(
+        tokens: &mut Peekable<impl Iterator<Item = &'b TokenPair<'b>>>,
+        linecol: &mut LineColCounter,
+    ) -> Result<&'b TokenPair<'b>, ArmaConfigError> {
+        while let Some(tpeek) = tokens.peek() {
+            if let Token::Whitespace(_) = tpeek.token() {
+                linecol.mod_cols(tpeek);
+                tokens.next();
+            } else {
+                return Ok(tpeek);
+            }
+        }
+        panic!("tokens was missing EOI")
+    }
 }
 
 #[cfg(test)]
-mod test {
-    use super::*;
+mod tests {
+    use crate::{render::render, tokenizer::tokenize};
+
+    use super::Preprocessor;
 
     #[test]
-    fn read_args() {
-        let tokens = tokenize("(B(C); call f);", "").unwrap();
-        let mut a = tokens.into_iter().peekable();
-        assert_eq!(
-            vec![vec![
-                Token::Word(String::from("B")),
-                Token::LeftParenthesis,
-                Token::Word(String::from("C")),
-                Token::RightParenthesis,
-                Token::Semicolon,
-                Token::Whitespace(Whitespace::Space),
-                Token::Word(String::from("call")),
-                Token::Whitespace(Whitespace::Space),
-                Token::Word(String::from("f"))
-            ]],
-            vec![read_args!(a)[0]
-                .iter()
-                .map(|tp| tp.token().to_owned())
-                .collect::<Vec<Token>>()]
+    fn simple_define() {
+        let tokens = tokenize(
+            "#define brett_greeting \"hi brett\"\n\ngreeting = brett_greeting;\n",
+            "test_simple_define",
         )
+        .unwrap();
+        let preprocessor = Preprocessor::execute(&tokens).unwrap();
+        println!("{:?}", render(preprocessor.output()).export());
     }
 
     #[test]
-    fn read_line() {
-        let tokens = tokenize("test = false;\ntest = true;\n", "").unwrap();
-        let mut a = tokens.into_iter().peekable();
-        assert_eq!(
-            vec![
-                Token::Word(String::from("test")),
-                Token::Whitespace(Whitespace::Space),
-                Token::Assignment,
-                Token::Whitespace(Whitespace::Space),
-                Token::Word(String::from("false")),
-                Token::Semicolon,
-            ],
-            read_line!(a)
-                .iter()
-                .map(|tp| tp.token().to_owned())
-                .collect::<Vec<Token>>()
-        );
-
-        let tokens = tokenize(" \"\\z\\mod\\addons\"\n", "").unwrap();
-        let mut a = tokens.into_iter().peekable();
-        assert_eq!(
-            vec![
-                Token::DoubleQuote,
-                Token::Escape,
-                Token::Word(String::from("z")),
-                Token::Escape,
-                Token::Word(String::from("mod")),
-                Token::Escape,
-                Token::Word(String::from("addons")),
-                Token::DoubleQuote
-            ],
-            read_line!(a)
-                .iter()
-                .map(|tp| tp.token().to_owned())
-                .collect::<Vec<Token>>()
+    fn nested_define() {
+        let tokens = tokenize(
+            "#define NAME brett\n#define HI \"hi NAME\"\n\ngreeting = HI;\n",
+            "test_simple_define",
         )
+        .unwrap();
+        let preprocessor = Preprocessor::execute(&tokens).unwrap();
+        println!("{:?}", render(preprocessor.output()).export());
+    }
+
+    #[test]
+    fn define_function_recursive_1() {
+        let content = r#"
+    #define MR(NAME) Mr. NAME
+    #define SAY_HI(NAME) Hi MR(NAME)
+
+    value = "SAY_HI(John)";
+    "#;
+        let tokens = tokenize(content, "").unwrap();
+        let preprocessor = Preprocessor::execute(&tokens).unwrap();
+        let rendered = render(preprocessor.output());
+        assert_eq!("\nvalue = \"Hi Mr. John\";\n", rendered.export());
     }
 }

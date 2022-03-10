@@ -1,4 +1,4 @@
-use super::parser::{Node, Statement, AST};
+use super::ast::{Node, Statement, AST};
 use crate::ArmaConfigError;
 
 #[derive(Debug)]

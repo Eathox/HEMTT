@@ -1,35 +1,22 @@
 use std::path::PathBuf;
 
+use pest::iterators::Pair;
+
 use super::{Rule, Statement};
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Node {
-    /// (Pos from Start, (Line, Col))
-    pub start: (usize, (usize, usize)),
-    /// (Pos from Start, (Line, Col))
-    pub end: (usize, (usize, usize)),
-    /// Original text of the line
+pub struct Node<'a> {
+    pair: Pair<'a, Rule>,
     pub line: String,
-    pub statement: Statement,
+    pub statement: Statement<'a>,
 }
 
-pub type ResultNodeVec = Result<Vec<Node>, String>;
+pub type ResultNodeVec<'a> = Result<Vec<Node<'a>>, String>;
 
-impl Node {
-    pub fn from_expr(
-        wd: PathBuf,
-        source: &str,
-        pair: pest::iterators::Pair<Rule>,
-    ) -> Result<Node, String> {
+impl<'a> Node<'a> {
+    pub fn from_expr(wd: PathBuf, source: &str, pair: Pair<'a, Rule>) -> Result<Node<'a>, String> {
         let node = Node {
-            start: (
-                pair.as_span().start_pos().pos(),
-                pair.as_span().start_pos().line_col(),
-            ),
-            end: (
-                pair.as_span().end_pos().pos(),
-                pair.as_span().end_pos().line_col(),
-            ),
+            pair: pair.clone(),
             line: pair.as_span().as_str().to_string(),
             statement: match pair.as_rule() {
                 Rule::config => Statement::Config(
@@ -113,5 +100,9 @@ impl Node {
             },
         };
         Ok(node)
+    }
+
+    pub fn pair(&self) -> &Pair<'a, Rule> {
+        &self.pair
     }
 }

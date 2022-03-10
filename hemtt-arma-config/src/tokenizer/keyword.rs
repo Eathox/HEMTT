@@ -6,6 +6,20 @@ pub enum Keyword {
     Enum,
 }
 
+impl Keyword {
+    pub fn len(&self) -> usize {
+        match self {
+            Keyword::Class => 5,
+            Keyword::Delete => 6,
+            Keyword::Enum => 4,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        false
+    }
+}
+
 impl ToString for Keyword {
     fn to_string(&self) -> String {
         match self {

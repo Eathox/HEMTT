@@ -1,18 +1,17 @@
 use std::collections::HashMap;
 
+use crate::tokenizer::{Token, TokenPair};
+
 pub use self::rendered::Rendered;
 
-use super::{token::Token, TokenPos};
-
-mod html;
 mod rendered;
 
-pub fn render(source: Vec<TokenPos>) -> Rendered {
+pub fn render<'a>(source: &'a Vec<&'a TokenPair<'a>>) -> Rendered {
     let mut map = HashMap::new();
     let mut line = Vec::new();
     let mut lc = 1;
     let mut cc = 1;
-    for token in &source {
+    for token in source {
         if token.token() == &Token::Newline {
             map.insert(lc, line);
             lc += 1;

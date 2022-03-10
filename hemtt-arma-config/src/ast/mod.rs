@@ -9,25 +9,15 @@ mod statement;
 pub use statement::Statement;
 
 #[derive(Parser)]
-#[grammar = "parser/config.pest"]
+#[grammar = "ast/config.pest"]
 pub struct ConfigParser;
 
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Debug, Clone)]
 /// Abstract Syntax Tree
-pub struct AST {
-    pub config: Node,
+pub struct AST<'a> {
+    pub config: Node<'a>,
 }
-
-// impl AST {
-//     pub fn valid(&self) -> bool {
-//         if let Some(report) = &self.report {
-//             report.errors.is_empty()
-//         } else {
-//             true
-//         }
-//     }
-// }
 
 /// Converts a raw string into an AST
 ///
@@ -35,13 +25,13 @@ pub struct AST {
 /// let content = "value = 123;";
 /// hemtt_arma_config::parse(content, "doc test");
 /// ```
-pub fn parse(source: &str, context: &str) -> Result<AST, String> {
-    let clean = source.replace("\r", "");
-    let pair = ConfigParser::parse(Rule::file, &clean)
+pub fn parse<'a>(source: &'a str, context: &str) -> Result<AST<'a>, String> {
+    // let clean = source.replace("\r", "");
+    let pair = ConfigParser::parse(Rule::file, source)
         .unwrap_or_else(|_| {
             let out = std::env::temp_dir().join("failed.txt");
             let mut f = std::fs::File::create(&out).expect("failed to create failed.txt");
-            f.write_all(clean.as_bytes()).unwrap();
+            f.write_all(source.as_bytes()).unwrap();
             f.flush().unwrap();
             panic!(
                 "failed to parse context: {}, saved at {}",
@@ -51,8 +41,11 @@ pub fn parse(source: &str, context: &str) -> Result<AST, String> {
         })
         .next()
         .unwrap();
-    let pair = pair.into_inner().next().unwrap();
-    let config = Node::from_expr(std::env::current_dir().unwrap(), source, pair)?;
+    let config = Node::from_expr(
+        std::env::current_dir().unwrap(),
+        source,
+        pair.into_inner().next().unwrap(),
+    )?;
     Ok(AST { config })
 }
 
@@ -62,7 +55,7 @@ mod tests {
 
     #[test]
     fn property() {
-        let ast = parse("value = 123;", "test");
-        println!("{:?}", ast);
+        let ast = parse("value = 123;", "test").unwrap();
+        println!("{:?}", ast.config);
     }
 }
