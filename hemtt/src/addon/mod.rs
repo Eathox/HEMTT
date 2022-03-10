@@ -14,7 +14,7 @@ pub struct Addon {
 impl Addon {
     pub fn new<S: Into<String>>(name: S, location: AddonLocation) -> Result<Self, HEMTTError> {
         let name = name.into();
-        let source = format!("{}/{}", location.to_string(), name);
+        let source = format!("{}/{}", location, name);
         Ok(Self {
             name: validate_name(name)?,
             location,
@@ -65,11 +65,10 @@ impl Addon {
     ///             Some(prefix) => {prefix}_{self.name}.pbo
     ///             None => {self.name}.pbo
     pub fn pbo(&self, prefix: Option<&str>) -> String {
-        if let Some(prefix) = prefix {
-            format!("{}_{}.pbo", prefix, self.name)
-        } else {
-            format!("{}.pbo", self.name)
-        }
+        prefix.map_or_else(
+            || format!("{}.pbo", self.name),
+            |prefix| format!("{}_{}.pbo", prefix, self.name),
+        )
     }
 
     /// Location of the PBO

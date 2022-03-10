@@ -7,7 +7,7 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 
 mod defaults;
-use defaults::*;
+use defaults::{default_folder_optionals, default_include, default_mainprefix, default_reuse_private_key, default_sig_version, default_version};
 
 use crate::{Addon, AddonLocation, HEMTTError};
 
@@ -267,15 +267,16 @@ impl Project {
 
     /// Signing authority
     pub fn authority(&self) -> Result<String, HEMTTError> {
-        if let Some(authority) = &self.authority {
-            hemtt_handlebars::render(authority, &self.into()).map_err(|e| e.into())
-        } else {
-            Ok(format!(
-                "{}-{}",
-                self.name().replace(" ", "_").to_lowercase(),
-                self.version()
-            ))
-        }
+        self.authority.as_ref().map_or_else(
+            || {
+                Ok(format!(
+                    "{}-{}",
+                    self.name().replace(' ', "_").to_lowercase(),
+                    self.version()
+                ))
+            },
+            |authority| hemtt_handlebars::render(authority, &self.into()).map_err(|e| e.into()),
+        )
     }
 
     /// Signature version used to sign releases

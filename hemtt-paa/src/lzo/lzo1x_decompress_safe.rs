@@ -13,16 +13,14 @@ pub unsafe extern "C" fn lzo1x_decompress_safe(
     out_len: *mut usize,
 ) -> i32 {
     let mut current_block;
-    let mut op: *mut u8;
-    let mut ip: *const u8;
     let mut t: usize;
     let mut next: usize;
     let mut state: usize = 0_usize;
     let mut m_pos: *const u8;
     let ip_end: *const u8 = in_.add(in_len);
     let op_end: *mut u8 = out.add(*out_len);
-    op = out;
-    ip = in_;
+    let mut op = out;
+    let mut ip = in_;
     if in_len >= 3_usize {
         if i32::from(*ip) > 17_i32 {
             t = (*{
@@ -110,7 +108,6 @@ pub unsafe extern "C" fn lzo1x_decompress_safe(
                     if t < 16_usize {
                         if state == 0_usize {
                             if t == 0_usize {
-                                let mut offset: usize;
                                 let ip_last: *const u8 = ip;
                                 loop {
                                     if i32::from(*ip) != 0_i32 {
@@ -126,7 +123,7 @@ pub unsafe extern "C" fn lzo1x_decompress_safe(
                                         break 'loop11;
                                     }
                                 }
-                                offset = ((ip as isize).wrapping_sub(ip_last as isize)
+                                let mut offset = ((ip as isize).wrapping_sub(ip_last as isize)
                                     / ::std::mem::size_of::<u8>() as isize)
                                     as usize;
                                 if offset
@@ -242,7 +239,6 @@ pub unsafe extern "C" fn lzo1x_decompress_safe(
                         } else if t >= 32_usize {
                             t = (t & 31_usize).wrapping_add((3_i32 - 1_i32) as usize);
                             if t == 2_usize {
-                                let mut offset: usize;
                                 let ip_last: *const u8 = ip;
                                 loop {
                                     if i32::from(*ip) != 0_i32 {
@@ -258,7 +254,7 @@ pub unsafe extern "C" fn lzo1x_decompress_safe(
                                         break 'loop11;
                                     }
                                 }
-                                offset = ((ip as isize).wrapping_sub(ip_last as isize)
+                                let mut offset = ((ip as isize).wrapping_sub(ip_last as isize)
                                     / ::std::mem::size_of::<u8>() as isize)
                                     as usize;
                                 if offset
@@ -295,7 +291,6 @@ pub unsafe extern "C" fn lzo1x_decompress_safe(
                             m_pos = m_pos.offset(-(((t & 8_usize) << 11_i32) as isize));
                             t = (t & 7_usize).wrapping_add((3_i32 - 1_i32) as usize);
                             if t == 2_usize {
-                                let mut offset: usize;
                                 let ip_last: *const u8 = ip;
                                 loop {
                                     if *ip as i32 != 0_i32 {
@@ -311,7 +306,7 @@ pub unsafe extern "C" fn lzo1x_decompress_safe(
                                         break 'loop11;
                                     }
                                 }
-                                offset = ((ip as isize).wrapping_sub(ip_last as isize)
+                                let mut offset = ((ip as isize).wrapping_sub(ip_last as isize)
                                     / ::std::mem::size_of::<u8>() as isize)
                                     as usize;
                                 if offset

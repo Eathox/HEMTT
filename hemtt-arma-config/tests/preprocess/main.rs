@@ -143,7 +143,7 @@ value = "SAY_HI(John,Smith)";
 }
 
 #[test]
-fn define_function_recursive_1() {
+fn define_function_recursive_1_word() {
     let content = r#"
 #define MR(NAME) Mr. NAME
 #define SAY_HI(NAME) Hi MR(NAME)
@@ -157,7 +157,21 @@ value = "SAY_HI(John)";
 }
 
 #[test]
-fn define_function_recursive_2() {
+fn define_function_recursive_1_words() {
+    let content = r#"
+#define MR(NAME) Mr. NAME
+#define SAY_HI(NAME) Hi MR(NAME)
+
+value = "SAY_HI(John Smith)";
+"#;
+    let tokens = tokenize(content, "").unwrap();
+    let preprocessor = Preprocessor::execute(&tokens).unwrap();
+    let rendered = hemtt_arma_config::render(preprocessor.output());
+    assert_eq!("\nvalue = \"Hi Mr. John Smith\";\n", rendered.export());
+}
+
+#[test]
+fn define_function_recursive_2_word() {
     let content = r#"
 #define ADD_PERIOD(NAME) NAME.
 #define MR(NAME) Mr. NAME
@@ -169,4 +183,19 @@ value = "SAY_HI(John)";
     let preprocessor = Preprocessor::execute(&tokens).unwrap();
     let rendered = hemtt_arma_config::render(preprocessor.output());
     assert_eq!("\nvalue = \"Hi Mr. John.\";\n", rendered.export());
+}
+
+#[test]
+fn define_function_recursive_2_words() {
+    let content = r#"
+#define ADD_PERIOD(NAME) NAME.
+#define MR(NAME) Mr. NAME
+#define SAY_HI(NAME) Hi MR(ADD_PERIOD(NAME))
+
+value = "SAY_HI(John Smith)";
+"#;
+    let tokens = tokenize(content, "").unwrap();
+    let preprocessor = Preprocessor::execute(&tokens).unwrap();
+    let rendered = hemtt_arma_config::render(preprocessor.output());
+    assert_eq!("\nvalue = \"Hi Mr. John Smith.\";\n", rendered.export());
 }

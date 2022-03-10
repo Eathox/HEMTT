@@ -46,16 +46,12 @@ unsafe extern "C" fn lzo1x_1_do_compress(
     wrkmem: *mut ::std::os::raw::c_void,
 ) -> usize {
     let mut current_block;
-    let mut ip: *const u8;
-    let mut op: *mut u8;
     let in_end: *const u8 = in_.add(in_len);
     let ip_end: *const u8 = in_.add(in_len).offset(-20_isize);
-    let mut ii: *const u8;
     let dict: *mut u16 = wrkmem as *mut u16;
-    op = out;
-    ip = in_;
-    ii = ip;
-    ip = ip.add(if ti < 4_usize {
+    let mut op = out;
+    let mut ii = in_;
+    let mut ip = in_.add(if ti < 4_usize {
         4_usize.wrapping_sub(ti)
     } else {
         0_usize

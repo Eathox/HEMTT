@@ -119,10 +119,7 @@ impl<'a> Preprocessor<'a> {
                     if let Token::Newline = Self::skip_whitespace(tokens, linecol)?.token() {
                         linecol.add_line();
                         tokens.next(); // Consume \n
-                    } else {
-                        println!("extra tokens after undefine");
                     }
-                    // let ident = Self::read_ident(&mut tokens, &mut linecol);
                 }
                 (Token::Newline, _, append) => {
                     linecol.add_line();
@@ -318,9 +315,7 @@ impl<'a> Preprocessor<'a> {
                     &mut s.into_iter().take(i + 1).peekable(),
                     &mut LineColCounter::new(),
                 )?;
-                println!("ident: {:?}", ident.0);
                 if let Some(d) = defines.get(&ident.0) {
-                    println!("found define: {:?}", d.statement());
                     let mut scoped_defines = Defines::new();
                     defines.all().iter().for_each(|(k, v)| {
                         scoped_defines.new_define(k, v.clone());
@@ -339,21 +334,25 @@ impl<'a> Preprocessor<'a> {
                             {
                                 tokens.next(); // Consume (
                                 for arg in f.args().clone() {
-                                    // let arg_clone = arg.clone().into_iter().map(|t| (*t).to_owned()).collect::<Vec<_>>();
+                                    let statement = Self::process_tokens_peekable(
+                                        &mut Self::read_call_arg(tokens, linecol, defines)?
+                                            .into_iter()
+                                            .peekable(),
+                                        linecol,
+                                        &mut scoped_defines,
+                                    )?;
                                     scoped_defines.new_word(
                                         &Self::read_ident(
                                             &mut arg.clone().into_iter().peekable(),
                                             &mut LineColCounter::new(),
                                         )?
                                         .0,
-                                        Self::read_call_arg(tokens, linecol, defines)?,
+                                        statement,
                                     );
                                 }
                             } else {
                                 panic!("Expected ( but found something else")
                             }
-                            println!("scoped defines: {:?}", scoped_defines);
-                            panic!();
                             return Self::process_tokens_peekable(
                                 &mut d.statement().into_iter().peekable(),
                                 linecol,
@@ -365,7 +364,6 @@ impl<'a> Preprocessor<'a> {
             }
             stack.remove(0);
         }
-        println!("done checking stack");
         Ok(original)
     }
 
@@ -374,10 +372,20 @@ impl<'a> Preprocessor<'a> {
         linecol: &mut LineColCounter,
         defines: &mut Defines<'b>,
     ) -> Result<Vec<&'b TokenPair<'b>>, ArmaConfigError> {
+        let mut depth = 0;
         let mut ret = Vec::new();
         while let Some(tnext) = &tokens.next() {
-            match tnext.token() {
-                Token::Comma | Token::RightParenthesis => return Ok(ret),
+            match (tnext.token(), depth) {
+                (Token::Comma, _) => return Ok(ret),
+                (Token::RightParenthesis, 0) => return Ok(ret),
+                (Token::RightParenthesis, _) => {
+                    depth -= 1;
+                    push_token!(tnext, ret, linecol);
+                }
+                (Token::LeftParenthesis, _) => {
+                    depth += 1;
+                    push_token!(tnext, ret, linecol);
+                }
                 _ => {
                     linecol.mod_cols(tnext);
                     push_token!(tnext, ret, linecol);
@@ -400,48 +408,5 @@ impl<'a> Preprocessor<'a> {
             }
         }
         panic!("tokens was missing EOI")
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::{render::render, tokenizer::tokenize};
-
-    use super::Preprocessor;
-
-    #[test]
-    fn simple_define() {
-        let tokens = tokenize(
-            "#define brett_greeting \"hi brett\"\n\ngreeting = brett_greeting;\n",
-            "test_simple_define",
-        )
-        .unwrap();
-        let preprocessor = Preprocessor::execute(&tokens).unwrap();
-        println!("{:?}", render(preprocessor.output()).export());
-    }
-
-    #[test]
-    fn nested_define() {
-        let tokens = tokenize(
-            "#define NAME brett\n#define HI \"hi NAME\"\n\ngreeting = HI;\n",
-            "test_simple_define",
-        )
-        .unwrap();
-        let preprocessor = Preprocessor::execute(&tokens).unwrap();
-        println!("{:?}", render(preprocessor.output()).export());
-    }
-
-    #[test]
-    fn define_function_recursive_1() {
-        let content = r#"
-    #define MR(NAME) Mr. NAME
-    #define SAY_HI(NAME) Hi MR(NAME)
-
-    value = "SAY_HI(John)";
-    "#;
-        let tokens = tokenize(content, "").unwrap();
-        let preprocessor = Preprocessor::execute(&tokens).unwrap();
-        let rendered = render(preprocessor.output());
-        assert_eq!("\nvalue = \"Hi Mr. John\";\n", rendered.export());
     }
 }
